@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering.Universal;
+using Unity.XR.CoreUtils;
 using UnityEngine.XR;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.UI;
@@ -66,6 +68,7 @@ namespace FirstAid
         private int completedSites;
         private bool desktopMode;
         private bool simulatorMode;
+        private bool headsetRunning;
         private bool inspected;
         private bool cooling;
         private bool contactHandled;
@@ -161,6 +164,8 @@ namespace FirstAid
 
         private void Awake()
         {
+            // URP uses this flag for XR rendering; stereoTargetEye alone is insufficient.
+            desktopCamera.GetUniversalAdditionalCameraData().allowXRRendering = false;
             xrHands = FirstAidXRHands.Create(xrCamera);
             var supplies = GameObject.Find("Supplies");
             if (supplies != null)
@@ -185,7 +190,8 @@ namespace FirstAid
             toolLabel = FirstAidToolLabel.Create(transform, desktopCamera);
             washStation = new FirstAidWashStation(transform, spout, sinkBowl, tapCollider, ShowStationNotice);
             coolingTap.selectEntered.AddListener(_ => ActivateCoolingTap());
-            SetDesktopMode(!HasHeadset());
+            headsetRunning = HasHeadset();
+            SetDesktopMode(!headsetRunning);
             SelectCase(0);
         }
 
@@ -266,6 +272,14 @@ namespace FirstAid
 
         private void Update()
         {
+            // Link can become ready after Start, including while the simulator is active.
+            bool headsetNow = HasHeadset();
+            if (headsetNow != headsetRunning)
+            {
+                headsetRunning = headsetNow;
+                SetDesktopMode(!headsetRunning);
+            }
+
             var keyboard = Keyboard.current;
             if (Application.isEditor && keyboard != null && keyboard.f2Key.wasPressedThisFrame)
             {
@@ -688,11 +702,17 @@ namespace FirstAid
                 xrListener.enabled = !value;
 
             bool simulatorActive = false;
+            bool hasHeadset = HasHeadset();
+            var origin = xrCamera.GetComponentInParent<XROrigin>();
+            if (origin != null)
+                origin.RequestedTrackingOriginMode = hasHeadset
+                    ? XROrigin.TrackingOriginMode.Floor
+                    : XROrigin.TrackingOriginMode.NotSpecified;
 #if UNITY_EDITOR
-            if (!value && !HasHeadset() && simulatorPrefab != null && simulator == null)
+            if (!value && !hasHeadset && simulatorPrefab != null && simulator == null)
                 simulator = Instantiate(simulatorPrefab);
 
-            simulatorActive = !value && simulator != null;
+            simulatorActive = !value && !hasHeadset && simulator != null;
             if (simulator != null)
                 simulator.SetActive(simulatorActive);
 #endif

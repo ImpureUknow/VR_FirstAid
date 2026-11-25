@@ -58,3 +58,29 @@
 - Unity VR Template และตัวอย่าง XR Interaction Toolkit 3.5.1 - XR Origin, คอนโทรลเลอร์ และ Simulator
 - แนวคิดและตำแหน่งแผลอ้างอิงโปสเตอร์โครงงานของผู้จัดทำ `FirstAid_VR_Poster_A3.pdf`
 - Noto Sans Thai ภายใต้ SIL Open Font License 1.1 ดูใบอนุญาตใน Assets/FirstAid/Resources/Typography/OFL.txt
+
+## ตรวจ Quest 3 ผ่าน Quest Link (Windows)
+
+การแก้ tracking รอบนี้อยู่ที่ `FirstAidSession.cs` และการยกเลิก rotation override ของ Main Camera ใน `FirstAid.unity`:
+
+- ตรวจสถานะ XR display ระหว่างเล่นด้วย เพื่อสลับจาก Mouse Mode เมื่อ Link พร้อมหลัง `Start` และกลับ Mouse Mode เมื่อ XR display หยุด
+- ขอ Floor tracking เมื่อมี XR display ทำงาน ให้ XROrigin ใช้ระดับพื้นจาก runtime และจัดการ Camera Offset เอง ค่า Camera Y Offset เดิม 1.36144 ยังอยู่สำหรับโหมดที่ต้องใช้ offset; ไม่กำหนดความสูง Main Camera หรือชดเชย pose ทุกเฟรม
+- ปิด URP XR rendering ของ Desktop Practice Camera (กล้องมุมสูง Y=2.49) และไม่เปิด Simulator เมื่อแว่นจริงทำงาน
+- ยกเลิกมุมก้ม 17 องศาที่ override บน Main Camera ให้ Tracked Pose Driver เป็นผู้ควบคุม pose
+
+ผลตรวจ: XR Rig เป็น root, Camera Offset และ Main Camera มี Scale (1,1,1), ไม่มี parent กลับแกน; Main Camera มี Tracked Pose Driver ตัวเดียว ใช้ XRI Head/Position, Rotation และ Tracking State โดยไม่มีตัวประมวลผลกลับทิศ ส่วน Mouse Mode ใช้กล้องคนละตัว ไม่พบสคริปต์ Gameplay เขียน transform ของกล้อง XR ซ้ำ ระบบเดิมตรวจแว่นเฉพาะ Start และสามารถเปิด Simulator ที่เคยสร้างไว้ทับแว่นได้ จึงเป็นจุดผิดพลาดที่แก้แล้ว ส่วนอาการ invert ที่ผู้เล่นเห็นยังต้องยืนยันกับฮาร์ดแวร์
+
+ตรวจ Windows แล้วใช้ OpenXR loader และ Meta runtime มี Oculus Touch / Quest Touch Plus profile เปิดอยู่ ไม่เปลี่ยน plug-in หรือ package รุ่นใด
+
+### ขั้นตอนทดสอบด้วยแว่นจริง
+
+1. เปิด Meta Horizon Link ให้ Quest 3 เชื่อมต่อสำเร็จ ตรวจระดับพื้นในพื้นที่เล่นของแว่น และตรวจว่า Meta เป็น active OpenXR runtime จากนั้นเปิด `FirstAid.unity` และกด Play
+2. ตรวจใน Play Mode: Desktop Practice Camera ต้อง inactive, Main Camera enabled, Simulator ไม่ active, XROrigin Requested/Current Tracking Origin ต้องเป็น Floor และ Camera Offset local Y ต้องเป็น 0 เมื่อ runtime ยอมรับ Floor
+3. ยืนและนั่งตามปกติ ความสูงกล้องต้องตามศีรษะจริง ย่อเข่าแล้วกล้องต้องลดลง เอนซ้าย/ขวาและเข้า/ออกจากโต๊ะประมาณ 10–20 ซม. ตำแหน่งศีรษะต้องเปลี่ยนทิศเดียวกันในโลกเสมือน หัน/ก้ม/เงยแล้วภาพต้องสัมพันธ์กับศีรษะ โดยไม่ใช้ thumbstick ระหว่างตรวจ
+4. เริ่ม Play ก่อน Link พร้อม แล้วเชื่อมต่อ Link: เมื่อ XR display เริ่ม running ต้องเปลี่ยนจาก Mouse เป็น XR และ Simulator ต้องดับถ้าเคยเปิดไว้ หาก loader เริ่มไม่สำเร็จตั้งแต่แรก ให้เชื่อมต่อ Link แล้ว Stop/Play ใหม่ (การแก้นี้ไม่ restart XR loader)
+5. ถ้าไม่มีแว่น ให้เริ่ม Play และทดสอบ Mouse Mode จากนั้นกด F2 สลับ Simulator ไปกลับ ตรวจมุมมองและการควบคุมเดิม รวมทั้งหยิบ/คืนอุปกรณ์และคลิปบอร์ด
+6. หากยังผิดปกติ ให้บันทึก Requested/Current Tracking Origin, local/world pose ของ Main Camera, Camera Offset, XR Rig และสถานะ Simulator ขณะเกิดปัญหา อย่าแก้ด้วยการกลับแกนหรือกำหนดความสูงกล้องคงที่
+
+ตรวจคอมไพล์ใน Unity 6000.5.9f1 และตรวจ Play Mode แบบไม่มี XR display: ผ่านการเริ่ม Mouse Mode, สลับ Mouse/Simulator ไปกลับ, กล้องทำงานถูกโหมด และ desktop URP XR rendering ปิด การตรวจนี้ไม่ยืนยันความแม่นยำ/ทิศทาง tracking ของ Quest 3 จริงหรือการเชื่อมต่อแว่นระหว่างเล่น
+
+อ้างอิงพฤติกรรม Floor/Device และ Camera Y Offset: [Unity XR Origin 2.6](https://docs.unity.cn/Packages/com.unity.xr.core-utils%402.6/manual/xr-origin-reference.html)

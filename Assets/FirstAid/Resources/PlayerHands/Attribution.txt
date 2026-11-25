@@ -1,0 +1,11 @@
+Free Pack - VR Hands (Rigged)
+Original creator: PolyOne Studio (Sketchfab: polyone)
+Source: https://sketchfab.com/3d-models/free-pack-vr-hands-rigged-b3b8309e59c748e3956531c8f57dd233
+Source model UID: b3b8309e59c748e3956531c8f57dd233
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License URL: https://creativecommons.org/licenses/by/4.0/
+Official metadata: https://api.sketchfab.com/v3/models/b3b8309e59c748e3956531c8f57dd233
+
+Changes for First Aid VR
+- Split and recentered the left and right meshes with their original UVs, skin weights and texture.
+- Replaced the source idle animation with in-game finger poses and a teal glove material.

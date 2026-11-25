@@ -31,8 +31,6 @@ namespace FirstAid
         [SerializeField] private Camera xrCamera;
         [SerializeField] private Canvas desktopCanvas;
         [SerializeField] private Canvas xrCanvas;
-        [SerializeField] private FirstAidPanel desktopPanel;
-        [SerializeField] private FirstAidPanel xrPanel;
         [SerializeField] private XRSimpleInteractable coolingTap;
         [SerializeField] private Collider tapCollider;
         [SerializeField] private GameObject tapMarker;
@@ -46,29 +44,43 @@ namespace FirstAid
 #endif
 
         private readonly List<XRDisplaySubsystem> displays = new();
+        private FirstAidClipboard clipboard;
+        private FirstAidNotice notice;
+        private FirstAidWashStation washStation;
+        private FirstAidXRHands xrHands;
+        private FirstAidToolLabel toolLabel;
+        private FirstAidTool highlightedTool;
+        private Transform highlightedFixture;
+        private string highlightedFixtureText;
         private FirstAidTool mouseTool;
         private FirstAidTool contactTool;
+        private FirstAidTool wrongTool;
+        private MaterialPropertyBlock markerProperties;
         private float contactTime;
         private float coolingTime;
-        private float feedbackUntil;
+        private float nextAimHint;
+        private float errorUntil;
         private int currentCase;
         private int siteIndex;
         private int stepIndex;
-        private int corrections;
         private int completedSites;
         private bool desktopMode;
+        private bool simulatorMode;
         private bool inspected;
         private bool cooling;
         private bool contactHandled;
-        private string feedback;
-        private bool panelDirty;
-        private MaterialPropertyBlock markerProperties;
+        private bool checklistDirty;
+        private bool thai;
+        private bool pouring;
+        private Vector3 streamStart;
+        private Vector3 streamEnd;
 
         private const float ContactRadius = 0.115f;
         private const float HoldSeconds = 0.75f;
+        private const string LanguagePreference = "FirstAidVR.Thai";
         private static readonly Color InspectColor = new(1f, 0.71f, 0.31f);
         private static readonly Color ReadyColor = new(0.13f, 0.86f, 0.73f);
-        private static readonly Color ErrorColor = new(1f, 0.41f, 0.31f);
+        private static readonly Color ErrorColor = new(1f, 0.34f, 0.29f);
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         private sealed class Step
@@ -76,16 +88,16 @@ namespace FirstAid
             public readonly ToolKind tool;
             public readonly string title;
             public readonly string instruction;
-            public readonly string reason;
+            public readonly string completion;
             public readonly float holdTime;
 
-            public Step(ToolKind tool, string title, string instruction, string reason,
+            public Step(ToolKind tool, string title, string instruction, string completion,
                 float holdTime = HoldSeconds)
             {
                 this.tool = tool;
                 this.title = title;
                 this.instruction = instruction;
-                this.reason = reason;
+                this.completion = completion;
                 this.holdTime = holdTime;
             }
 
@@ -112,25 +124,25 @@ namespace FirstAid
             new[]
             {
                 new Step(ToolKind.Water, "Rinse the graze", "Rinse the marked spot with clean water or saline.",
-                    "Rinsing removes grit that can stay under a dressing."),
+                    "Rinse complete.", 1.0f),
                 new Step(ToolKind.Dressing, "Cover the graze", "Place a sterile dressing over the wound.",
-                    "The dressing protects the cleaned area.")
+                    "Wound covered.")
             },
             new[]
             {
                 new Step(ToolKind.Gauze, "Control the bleeding", "Hold clean gauze against the marked cut.",
-                    "Pressure helps stop bleeding before you clean the cut.", 1.25f),
+                    "Bleeding controlled.", 1.25f),
                 new Step(ToolKind.Water, "Rinse the cut", "Use clean water or saline once the bleeding stops.",
-                    "Cleaning before covering helps remove dirt."),
+                    "Rinse complete.", 1.0f),
                 new Step(ToolKind.Dressing, "Cover the cut", "Place a sterile dressing over the cleaned cut.",
-                    "A dressing protects the cleaned wound.")
+                    "Wound covered.")
             },
             new[]
             {
                 new Step(ToolKind.Tap, "Cool with running water", "Select the sink tap to simulate 20 min of cooling.",
-                    "Running water carries heat away from the skin.", 2.0f),
+                    "Cooling complete.", 2.0f),
                 new Step(ToolKind.Film, "Cover the scald", "Lay a loose sheet of cling film over the scald.",
-                    "A loose cover protects the skin and leaves space for swelling.")
+                    "Wound covered.")
             }
         };
 
@@ -147,14 +159,45 @@ namespace FirstAid
         private PatientCase CurrentPatient => siteIndex == 0 ? patients[currentCase] : alternateSites[currentCase];
         private Step CurrentStep => Steps[currentCase][stepIndex];
 
+        private void Awake()
+        {
+            xrHands = FirstAidXRHands.Create(xrCamera);
+            var supplies = GameObject.Find("Supplies");
+            if (supplies != null)
+            {
+                foreach (var label in supplies.GetComponentsInChildren<TextMesh>(true))
+                {
+                    if (label.name == "Name Tag" || label.name == "Saline Label")
+                        label.gameObject.SetActive(false);
+                }
+            }
+        }
+
         private void Start()
         {
+            FirstAidTreatmentCovers.Install(patients, alternateSites);
+            thai = PlayerPrefs.GetInt(LanguagePreference, 0) != 0;
             markerProperties = new MaterialPropertyBlock();
-            desktopPanel.Bind(this, true);
-            xrPanel.Bind(this, false);
+            desktopCanvas.gameObject.SetActive(false);
+            xrCanvas.gameObject.SetActive(false);
+            clipboard = FirstAidClipboard.Create(this, transform);
+            notice = FirstAidNotice.Create(transform);
+            toolLabel = FirstAidToolLabel.Create(transform, desktopCamera);
+            washStation = new FirstAidWashStation(transform, spout, sinkBowl, tapCollider, ShowStationNotice);
             coolingTap.selectEntered.AddListener(_ => ActivateCoolingTap());
             SetDesktopMode(!HasHeadset());
             SelectCase(0);
+        }
+
+        public void SetThai(bool value)
+        {
+            if (thai == value)
+                return;
+
+            thai = value;
+            PlayerPrefs.SetInt(LanguagePreference, value ? 1 : 0);
+            notice.Hide();
+            checklistDirty = true;
         }
 
         public void SelectCase(int index)
@@ -169,16 +212,19 @@ namespace FirstAid
         private void StartPractice(int nextCase, int nextSite)
         {
             ReturnTools();
+            if (nextCase != currentCase)
+                washStation.ResetHands();
             currentCase = nextCase;
             siteIndex = nextSite;
             stepIndex = 0;
-            corrections = 0;
             inspected = false;
             cooling = false;
             coolingTime = 0f;
+            nextAimHint = 0f;
+            errorUntil = 0f;
+            wrongTool = null;
             ResetContact();
-            feedback = null;
-            feedbackUntil = 0f;
+            notice.Hide();
 
             for (int i = 0; i < patients.Length; i++)
             {
@@ -187,8 +233,8 @@ namespace FirstAid
                 ResetSite(alternateSites[i], siteIndex == 1);
             }
 
-            panelDirty = true;
-            RefreshPanel();
+            checklistDirty = true;
+            RefreshChecklist();
         }
 
         private static void ResetSite(PatientCase site, bool visible)
@@ -206,33 +252,16 @@ namespace FirstAid
                 return;
 
             inspected = true;
-            SetFeedback(Observations[currentCase], 5.5f);
+            checklistDirty = true;
+            ShowNotice(Observations[currentCase], null, false, 3.5f);
         }
 
-        public void ActivateCoolingTap()
+        public void ActivateCoolingTap() => washStation.ToggleTap();
+
+        private void ShowStationNotice(string message, Vector3 point, bool error)
         {
-            if (IsComplete)
-                return;
-
-            if (!inspected)
-            {
-                SetFeedback("Inspect the injury before choosing a treatment.", 3.5f);
-                return;
-            }
-
-            if (CurrentStep.tool != ToolKind.Tap)
-            {
-                corrections++;
-                SetFeedback(CurrentStep.reason, 4.0f);
-                return;
-            }
-
-            if (cooling)
-                return;
-
-            cooling = true;
-            coolingTime = 0f;
-            SetFeedback("Simulating cooling under running water.", 3.0f);
+            notice.Show(FirstAidLanguage.Get(message, thai), null, point, 0.095f, error, 2.1f);
+            checklistDirty = true;
         }
 
         private void Update()
@@ -241,10 +270,18 @@ namespace FirstAid
             if (Application.isEditor && keyboard != null && keyboard.f2Key.wasPressedThisFrame)
             {
                 SetDesktopMode(!desktopMode);
-                RefreshPanel();
+                RefreshChecklist();
                 return;
             }
 
+            if (keyboard != null && keyboard.f3Key.wasPressedThisFrame)
+                SetThai(!thai);
+
+            clipboard.UpdatePose();
+            highlightedTool = null;
+            highlightedFixture = null;
+            pouring = false;
+            washStation.BeginFrame();
             if (desktopMode)
             {
                 FitDesktopCamera();
@@ -253,18 +290,20 @@ namespace FirstAid
             else
             {
                 UpdateXR();
+                xrHands.UpdatePoses(washStation.HasGlove(0), washStation.HasGlove(1));
             }
+
+            if (highlightedTool != null)
+                toolLabel.Show(highlightedTool.transform, highlightedTool.DisplayName(thai));
+            else if (highlightedFixture != null)
+                toolLabel.Show(highlightedFixture, FirstAidLanguage.Get(highlightedFixtureText, thai));
+            else
+                toolLabel.Hide();
 
             UpdateCooling();
-            UpdateWater();
-            if (feedbackUntil > 0f && Time.unscaledTime >= feedbackUntil)
-            {
-                feedback = null;
-                feedbackUntil = 0f;
-                panelDirty = true;
-            }
-
-            RefreshPanel();
+            sinkWater.SetFlow(spout.position, washStation.StreamTarget, washStation.TapOpen);
+            rinseWater.SetFlow(streamStart, streamEnd, pouring);
+            RefreshChecklist();
         }
 
         private void UpdateDesktop(Keyboard keyboard)
@@ -277,32 +316,66 @@ namespace FirstAid
                 if (keyboard.bKey.wasPressedThisFrame) SwitchSite();
                 if (keyboard.iKey.wasPressedThisFrame) InspectWound();
                 if (keyboard.rKey.wasPressedThisFrame) RestartCase();
+                if (keyboard.lKey.wasPressedThisFrame) SetThai(!thai);
+                if (keyboard.tabKey.wasPressedThisFrame) ToggleClipboard();
             }
 
             var mouse = Mouse.current;
             if (mouse == null)
                 return;
 
-            if (mouse.rightButton.wasPressedThisFrame && mouseTool != null)
-                ReturnMouseTool();
+            if (mouse.rightButton.wasPressedThisFrame)
+            {
+                if (clipboard.IsOpen)
+                    clipboard.ToggleMouse();
+                else if (mouseTool != null)
+                    ReturnMouseTool();
+                return;
+            }
 
             Vector2 position = mouse.position.ReadValue();
             bool overUI = EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
-            if (!overUI && desktopCamera.pixelRect.Contains(position))
-                UpdatePointer(desktopCamera.ScreenPointToRay(position), mouse.leftButton.wasPressedThisFrame);
-            else
+            if (clipboard.IsOpen || overUI || !desktopCamera.pixelRect.Contains(position))
+            {
                 ResetContact();
+                return;
+            }
+
+            bool tilt = keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
+            UpdatePointer(desktopCamera.ScreenPointToRay(position), mouse.leftButton.wasPressedThisFrame,
+                mouse.leftButton.isPressed, tilt);
         }
 
-        private void UpdatePointer(Ray ray, bool clicked)
+        private void ToggleClipboard()
         {
-            if (IsComplete)
-                return;
+            if (mouseTool != null)
+                ReturnMouseTool();
+            clipboard.ToggleMouse();
+        }
 
-            bool onTarget = CurrentPatient.targetCollider.Raycast(ray, out _, 12f);
+        private void UpdatePointer(Ray ray, bool clicked, bool pressed, bool tilt)
+        {
+            if (clicked && tapCollider.Raycast(ray, out _, 12f))
+            {
+                ActivateCoolingTap();
+                return;
+            }
+
+            bool onStream = washStation.IsAimingAtStream(ray);
+            bool onTarget = !IsComplete && CurrentPatient.targetCollider.Raycast(ray, out _, 12f);
             if (mouseTool == null)
             {
                 ResetContact();
+                if (!clicked && Physics.Raycast(ray, out var hover, 12f,
+                        Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                    Highlight(hover.collider);
+
+                if (pressed && onStream && washStation.TapOpen)
+                {
+                    washStation.WashFromMouse(Time.unscaledDeltaTime);
+                    return;
+                }
+
                 if (clicked && onTarget && !inspected)
                     InspectWound();
                 else if (clicked)
@@ -310,11 +383,19 @@ namespace FirstAid
                 return;
             }
 
-            var surface = new Plane(Vector3.up, CurrentPatient.target.position + Vector3.up * 0.09f);
-            if (surface.Raycast(ray, out float distance))
-                mouseTool.MoveForMouse(ray.GetPoint(distance));
+            if (onStream && !tilt && mouseTool.Kind == ToolKind.Water)
+            {
+                mouseTool.MoveMouthTo(washStation.RefillPosition);
+                washStation.TryRefill(mouseTool, Time.unscaledDeltaTime);
+                ResetContact();
+                return;
+            }
 
-            if (UpdateContact(onTarget ? mouseTool : null))
+            var surface = new Plane(Vector3.up, CurrentPatient.target.position);
+            if (surface.Raycast(ray, out float distance))
+                mouseTool.MoveForMouse(ray.GetPoint(distance), desktopCamera.transform.forward, tilt);
+
+            if (UpdateContact(FindContact(mouseTool, onTarget)))
                 ReturnMouseTool();
         }
 
@@ -323,15 +404,21 @@ namespace FirstAid
             if (!Physics.Raycast(ray, out var hit, 12f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 return;
 
-            if (hit.collider == tapCollider)
+            if (hit.collider == clipboard.HitBox)
             {
-                ActivateCoolingTap();
+                ToggleClipboard();
                 return;
             }
 
-            mouseTool = hit.collider.GetComponentInParent<FirstAidTool>();
-            if (mouseTool != null)
-                SetFeedback("Bring " + mouseTool.Label.ToLowerInvariant() + " to the wound marker.", 2.5f);
+            if (washStation.IsGloveBox(hit.collider))
+            {
+                washStation.EquipFromMouse();
+                return;
+            }
+
+            var tool = hit.collider.GetComponentInParent<FirstAidTool>();
+            if (tool != null && (!IsComplete || tool.Kind == ToolKind.Water))
+                mouseTool = tool;
         }
 
         private void ReturnMouseTool()
@@ -341,22 +428,112 @@ namespace FirstAid
             ResetContact();
         }
 
+        private void Highlight(Collider hit)
+        {
+            var tool = hit.GetComponentInParent<FirstAidTool>();
+            if (tool != null && !tool.IsGrabbed)
+                highlightedTool = tool;
+            else if (hit == tapCollider || washStation.IsGloveBox(hit))
+            {
+                highlightedFixture = hit.transform;
+                highlightedFixtureText = hit == tapCollider ?
+                    washStation.TapOpen ? "Turn tap off" : "Turn tap on" : "Glove box";
+            }
+        }
+
         private void UpdateXR()
         {
-            FirstAidTool reaching = null;
-            if (!IsComplete)
+            for (int hand = 0; hand < 2; hand++)
             {
-                foreach (var tool in tools)
+                if (xrHands.TryGetFreePalm(hand, out Vector3 palm))
+                    washStation.WashAt(hand, palm, Time.unscaledDeltaTime);
+            }
+
+            FirstAidTool reaching = null;
+            foreach (var tool in tools)
+            {
+                if (tool.IsHovered)
                 {
-                    if (tool.IsGrabbed && tool.Reaches(CurrentPatient.target.position, ContactRadius))
-                    {
-                        reaching = tool;
-                        break;
-                    }
+                    highlightedTool = tool;
+                    break;
+                }
+            }
+
+            foreach (var tool in tools)
+            {
+                if (!tool.IsGrabbed || washStation.TryRefill(tool, Time.unscaledDeltaTime) || IsComplete)
+                    continue;
+
+                var contact = FindContact(tool, tool.Reaches(CurrentPatient.target.position, ContactRadius));
+                reaching ??= contact;
+            }
+
+            if (highlightedTool == null)
+            {
+                if (coolingTap.isHovered)
+                    Highlight(tapCollider);
+                else if (washStation.GloveBoxHovered)
+                    Highlight(washStation.GloveCollider);
+            }
+
+            if (highlightedTool == null && highlightedFixture == null && simulatorMode &&
+                Mouse.current is { } pointer && !pointer.rightButton.isPressed)
+            {
+                var ray = xrCamera.ScreenPointToRay(pointer.position.ReadValue());
+                if (Physics.Raycast(ray, out var hover, 12f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                {
+                    Highlight(hover.collider);
                 }
             }
 
             UpdateContact(reaching);
+        }
+
+        private FirstAidTool FindContact(FirstAidTool tool, bool overlapsWound)
+        {
+            if (IsComplete)
+                return null;
+            Vector3 wound = CurrentPatient.target.position;
+            bool aboveWound = tool.IsBottle && tool.IsAbove(wound);
+            if (Time.unscaledTime < errorUntil && tool != wrongTool && inspected &&
+                (overlapsWound || aboveWound) && CurrentStep.Accepts(tool.Kind))
+            {
+                errorUntil = 0f;
+                nextAimHint = 0f;
+                notice.Hide();
+            }
+
+            if (!tool.IsBottle)
+                return overlapsWound ? tool : null;
+            if (tool.Liquid <= 0f && aboveWound && Time.unscaledTime >= nextAimHint)
+            {
+                ShowNotice(tool.Kind == ToolKind.Water ? "Water empty. Refill at the tap." : "Saline empty. Pick up a fresh bottle.",
+                    tool, true, 2f);
+                nextAimHint = Time.unscaledTime + 3f;
+            }
+
+            bool flowing = tool.TryPour(wound, out Vector3 origin, out Vector3 impact, out bool hitsWound);
+            if (flowing)
+                tool.Drain(Time.unscaledDeltaTime);
+            if (flowing && (!pouring || hitsWound))
+            {
+                pouring = true;
+                streamStart = origin;
+                streamEnd = impact;
+            }
+
+            if (hitsWound)
+                return tool;
+
+            if (inspected && CurrentStep.Accepts(tool.Kind) && Time.unscaledTime >= nextAimHint &&
+                aboveWound && Time.unscaledTime >= errorUntil)
+            {
+                ShowNotice(flowing ? "Aim the stream at the wound." : "Tilt the bottle to pour.",
+                    tool, false, 1.7f);
+                nextAimHint = Time.unscaledTime + 3f;
+            }
+
+            return null;
         }
 
         private bool UpdateContact(FirstAidTool tool)
@@ -370,9 +547,9 @@ namespace FirstAid
             if (tool == null || contactHandled || IsComplete)
                 return false;
 
-            bool correct = inspected && CurrentStep.Accepts(tool.Kind);
+            bool correct = washStation.Ready && inspected && CurrentStep.Accepts(tool.Kind);
             contactTime += Time.unscaledDeltaTime;
-            if (contactTime < (correct ? CurrentStep.holdTime : 0.40f))
+            if (contactTime < (correct ? CurrentStep.holdTime : 0.38f))
                 return false;
 
             contactHandled = true;
@@ -382,15 +559,26 @@ namespace FirstAid
                 return true;
             }
 
-            if (!inspected)
-                SetFeedback("Inspect the injury before choosing a treatment.", 3.5f);
-            else
-            {
-                corrections++;
-                SetFeedback(CurrentStep.reason, 4.0f);
-            }
+            ShowWrongOrder(tool);
+            return false;
+        }
 
-            return true;
+        private void ShowWrongOrder(FirstAidTool tool)
+        {
+            string instruction = !washStation.Ready ? PreparationText() :
+                !inspected ? "Inspect the injury before choosing a treatment." : CurrentStep.instruction;
+            string message = $"{FirstAidLanguage.Get("Wrong order", thai)}\n{FirstAidLanguage.Get(instruction, thai)}";
+            Transform hand = tool != null ? tool.HoldingHand : null;
+            notice.Show(message, hand, CurrentPatient.target.position, hand != null ? 0.17f : 0.16f, true, 3f);
+            wrongTool = tool;
+            errorUntil = Time.unscaledTime + 2.6f;
+        }
+
+        private void ShowNotice(string message, FirstAidTool tool, bool error, float seconds)
+        {
+            Transform hand = tool != null ? tool.HoldingHand : null;
+            notice.Show(FirstAidLanguage.Get(message, thai), hand, CurrentPatient.target.position,
+                hand != null ? 0.17f : 0.16f, error, seconds);
         }
 
         private void ResetContact()
@@ -402,9 +590,18 @@ namespace FirstAid
 
         private void UpdateCooling()
         {
-            if (!cooling)
+            bool allowed = !IsComplete && inspected && washStation.Ready &&
+                CurrentStep.tool == ToolKind.Tap && washStation.TapOpen;
+            if (!allowed)
+            {
+                cooling = false;
                 return;
+            }
 
+            if (!cooling && coolingTime <= 0f)
+                ShowNotice("20 min of cooling (simulated)", null, false, 2.1f);
+
+            cooling = true;
             coolingTime += Time.unscaledDeltaTime;
             if (coolingTime >= CurrentStep.holdTime)
             {
@@ -413,15 +610,8 @@ namespace FirstAid
             }
         }
 
-        private void UpdateWater()
-        {
-            sinkWater.SetFlow(spout.position, sinkBowl.position, cooling);
-            bool rinsing = inspected && !IsComplete && contactTool != null && !contactHandled
-                && CurrentStep.tool == ToolKind.Water && CurrentStep.Accepts(contactTool.Kind);
-            Vector3 wound = CurrentPatient.target.position;
-            Vector3 from = rinsing ? contactTool.transform.position + Vector3.up * 0.08f : wound;
-            rinseWater.SetFlow(from, wound, rinsing);
-        }
+        private string PreparationText() => washStation.BothWashed ?
+            "Use the glove box with each hand." : "Open the tap and wash both hands.";
 
         private void CompleteStep()
         {
@@ -430,49 +620,48 @@ namespace FirstAid
                 CurrentPatient.debris.SetActive(false);
 
             stepIndex++;
+            pouring = false;
+            errorUntil = 0f;
             if (IsComplete)
             {
                 completedSites |= 1 << (currentCase * 2 + siteIndex);
                 CurrentPatient.target.gameObject.SetActive(false);
+                if (finished.tool == ToolKind.Dressing)
+                    CurrentPatient.woundGroup.SetActive(false);
                 CurrentPatient.covering.SetActive(true);
             }
 
-            SetFeedback(finished.reason, 5.0f);
+            checklistDirty = true;
+            nextAimHint = Time.unscaledTime + 3f;
+            ShowNotice(finished.completion, null, false, 2.5f);
         }
 
-        private void SetFeedback(string message, float seconds)
+        private void RefreshChecklist()
         {
-            feedback = message;
-            feedbackUntil = Time.unscaledTime + seconds;
-            panelDirty = true;
-        }
-
-        private void RefreshPanel()
-        {
-            var panel = desktopMode ? desktopPanel : xrPanel;
-            bool useTap = inspected && !IsComplete && CurrentStep.tool == ToolKind.Tap;
+            bool useTap = !washStation.BothWashed && !washStation.TapOpen ||
+                inspected && !IsComplete && CurrentStep.tool == ToolKind.Tap;
             if (tapMarker.activeSelf != useTap)
                 tapMarker.SetActive(useTap);
 
-            if (panelDirty)
+            if (checklistDirty)
             {
-                string instruction = !inspected ? "Inspect the marked injury to begin." :
+                string instruction = !washStation.Ready ? PreparationText() :
+                    !inspected ? "Inspect the marked injury to begin." :
                     IsComplete ? "Wound covered. Try another site or choose a new case." :
                     CurrentStep.instruction;
-                panel.Show(currentCase, siteIndex, Locations[currentCase, siteIndex], Checklists[currentCase],
-                    inspected, stepIndex, instruction, feedback, corrections, completedSites);
-                panelDirty = false;
+                clipboard.Refresh(thai, currentCase, siteIndex, Locations[currentCase, siteIndex],
+                    Checklists[currentCase], inspected, stepIndex, instruction, completedSites);
+                checklistDirty = false;
             }
 
-            float progress = !IsComplete && inspected
-                ? Mathf.Clamp01((cooling ? coolingTime : contactTime) / CurrentStep.holdTime)
+            float progress = !IsComplete && inspected && !contactHandled
+                ? Mathf.Clamp01((CurrentStep.tool == ToolKind.Tap ? coolingTime : contactTime) / CurrentStep.holdTime)
                 : 0f;
-            panel.ShowHold(progress);
+            clipboard.SetProgress(washStation.Ready ? progress : washStation.WashProgress);
 
             if (!IsComplete)
             {
-                Color color = !inspected ? InspectColor :
-                    contactTool != null && !CurrentStep.Accepts(contactTool.Kind) ? ErrorColor : ReadyColor;
+                Color color = Time.unscaledTime < errorUntil ? ErrorColor : inspected ? ReadyColor : InspectColor;
                 markerProperties.SetColor(BaseColor, color);
                 CurrentPatient.marker.SetPropertyBlock(markerProperties);
             }
@@ -485,18 +674,37 @@ namespace FirstAid
             foreach (var tool in tools)
                 tool.SetXRGrabbingEnabled(!value);
             coolingTap.enabled = !value;
-
+            washStation.SetXR(!value);
             ResetContact();
-            panelDirty = true;
+            checklistDirty = true;
+
             desktopCamera.gameObject.SetActive(value);
+            desktopCamera.rect = new Rect(0f, 0f, 1f, 1f);
             if (value)
                 FitDesktopCamera();
-            desktopCanvas.gameObject.SetActive(value);
             xrCamera.enabled = !value;
-            xrCanvas.gameObject.SetActive(!value);
             var xrListener = xrCamera.GetComponent<AudioListener>();
             if (xrListener != null)
                 xrListener.enabled = !value;
+
+            bool simulatorActive = false;
+#if UNITY_EDITOR
+            if (!value && !HasHeadset() && simulatorPrefab != null && simulator == null)
+                simulator = Instantiate(simulatorPrefab);
+
+            simulatorActive = !value && simulator != null;
+            if (simulator != null)
+                simulator.SetActive(simulatorActive);
+#endif
+
+            Camera view = value ? desktopCamera : xrCamera;
+            simulatorMode = simulatorActive;
+            clipboard.SetMode(view, value, simulatorActive);
+            xrHands.SetVisible(!value);
+            toolLabel.SetCamera(view);
+            toolLabel.Hide();
+            notice.SetCamera(view);
+            notice.Hide();
 
             if (EventSystem.current != null &&
                 EventSystem.current.TryGetComponent<XRUIInputModule>(out var module))
@@ -505,19 +713,12 @@ namespace FirstAid
                 module.enableMouseInput = value;
             }
 
-#if UNITY_EDITOR
-            if (!value && !HasHeadset() && simulatorPrefab != null && simulator == null)
-                simulator = Instantiate(simulatorPrefab);
-
-            if (simulator != null)
-                simulator.SetActive(!value);
-#endif
         }
 
         private void FitDesktopCamera()
         {
             float aspect = desktopCamera.pixelWidth / (float)Mathf.Max(1, desktopCamera.pixelHeight);
-            desktopCamera.orthographicSize = Mathf.Max(1.04f, 1.27f / Mathf.Max(0.1f, aspect));
+            desktopCamera.orthographicSize = Mathf.Max(1.06f, 1.25f / Mathf.Max(0.1f, aspect));
         }
 
         private bool HasHeadset()

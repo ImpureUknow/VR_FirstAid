@@ -19,8 +19,8 @@ namespace FirstAid
         private static readonly Color Line = new(0.64f, 0.66f, 0.58f);
         private static readonly Color ButtonPaper = new(0.86f, 0.87f, 0.80f);
         private static readonly Color Selected = new(0.17f, 0.36f, 0.31f);
-        private static readonly Vector3 HomePosition = new(-0.91f, 0.908f, -0.46f);
-        private static readonly Quaternion HomeRotation = Quaternion.Euler(-90f, 180f, 0f);
+        private Vector3 homePosition = new(-0.91f, 0.908f, -0.46f);
+        private Quaternion homeRotation = Quaternion.Euler(-90f, 180f, 0f);
 
         private const float PaperHeight = 0.264f;
         private const int ReadingLayer = 31;
@@ -72,8 +72,14 @@ namespace FirstAid
         {
             var host = new GameObject("Practice Clipboard");
             host.transform.SetParent(parent, false);
-            host.transform.SetPositionAndRotation(HomePosition, HomeRotation);
             var controller = host.AddComponent<FirstAidClipboard>();
+            var rest = parent.Find("Clipboard Rest");
+            if (rest != null)
+            {
+                controller.homePosition = rest.position;
+                controller.homeRotation = rest.rotation;
+            }
+            host.transform.SetPositionAndRotation(controller.homePosition, controller.homeRotation);
             controller.Build(session);
             return controller;
         }
@@ -344,9 +350,9 @@ namespace FirstAid
             returnPending = false;
             transform.localScale = Vector3.one;
             body.isKinematic = true;
-            body.position = HomePosition;
-            body.rotation = HomeRotation;
-            transform.SetPositionAndRotation(HomePosition, HomeRotation);
+            body.position = homePosition;
+            body.rotation = homeRotation;
+            transform.SetPositionAndRotation(homePosition, homeRotation);
         }
 
         public void Refresh(bool thai, int selected, int site, string wound, string[] checklist,

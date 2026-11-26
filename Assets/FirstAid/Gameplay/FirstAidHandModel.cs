@@ -88,7 +88,7 @@ namespace FirstAid
             if (bottle == null)
             {
                 Root.localPosition = Vector3.zero;
-                Root.localRotation = Quaternion.Euler(Mathf.Lerp(-35f, -7f, grip), side * Mathf.Lerp(11f, -7f, grip), 0f) *
+                Root.localRotation = Quaternion.Euler(Mathf.Lerp(-14f, -7f, grip), side * Mathf.Lerp(11f, -7f, grip), 0f) *
                     Quaternion.AngleAxis(side * Mathf.Lerp(106f, 83f, grip), Vector3.forward);
             }
             else

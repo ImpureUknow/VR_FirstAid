@@ -49,6 +49,7 @@ namespace FirstAid
         private FirstAidClipboard clipboard;
         private FirstAidNotice notice;
         private FirstAidWashStation washStation;
+        private FirstAidTreatmentBed treatmentBed;
         private FirstAidXRHands xrHands;
         private FirstAidToolLabel toolLabel;
         private FirstAidTool highlightedTool;
@@ -181,6 +182,7 @@ namespace FirstAid
         private void Start()
         {
             FirstAidTreatmentCovers.Install(patients, alternateSites);
+            treatmentBed = FirstAidTreatmentBed.Create(patients[0].patient.transform.parent);
             thai = PlayerPrefs.GetInt(LanguagePreference, 0) != 0;
             markerProperties = new MaterialPropertyBlock();
             desktopCanvas.gameObject.SetActive(false);
@@ -239,6 +241,7 @@ namespace FirstAid
                 ResetSite(alternateSites[i], siteIndex == 1);
             }
 
+            treatmentBed?.Present(CurrentPatient.target);
             checklistDirty = true;
             RefreshChecklist();
         }
@@ -582,8 +585,7 @@ namespace FirstAid
             string instruction = !washStation.Ready ? PreparationText() :
                 !inspected ? "Inspect the injury before choosing a treatment." : CurrentStep.instruction;
             string message = $"{FirstAidLanguage.Get("Wrong order", thai)}\n{FirstAidLanguage.Get(instruction, thai)}";
-            Transform hand = tool != null ? tool.HoldingHand : null;
-            notice.Show(message, hand, CurrentPatient.target.position, hand != null ? 0.17f : 0.16f, true, 3f);
+            notice.Show(message, null, CurrentPatient.target.position, 0.11f, true, 3.5f);
             wrongTool = tool;
             errorUntil = Time.unscaledTime + 2.6f;
         }
@@ -720,6 +722,7 @@ namespace FirstAid
             Camera view = value ? desktopCamera : xrCamera;
             simulatorMode = simulatorActive;
             clipboard.SetMode(view, value, simulatorActive);
+            xrHands.SetSimulatorOffset(simulatorActive);
             xrHands.SetVisible(!value);
             toolLabel.SetCamera(view);
             toolLabel.Hide();

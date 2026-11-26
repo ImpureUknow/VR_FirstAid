@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem.XR;
 using UnityEngine.XR.Hands;
 using UnityEngine.XR.Interaction.Toolkit.Inputs;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
@@ -43,6 +44,12 @@ namespace FirstAid
             right?.SetVisible(visible);
         }
 
+        public void SetSimulatorOffset(bool active)
+        {
+            left?.SetSimulatorOffset(active);
+            right?.SetSimulatorOffset(active);
+        }
+
         public bool TryGetFreePalm(int hand, out Vector3 palm)
         {
             palm = default;
@@ -59,6 +66,7 @@ namespace FirstAid
         private sealed class Hand
         {
             private readonly NearFarInteractor controllerInteractor;
+            private readonly Transform controllerOffset;
             private readonly XRBaseInteractor[] trackedInteractors;
             private readonly XRHandSkeletonDriver[] drivers;
             private readonly FirstAidHandModel controllerModel;
@@ -77,6 +85,15 @@ namespace FirstAid
 
                 if (controller != null)
                 {
+                    var driver = controller.GetComponentInChildren<TrackedPoseDriver>(true);
+                    if (driver != null)
+                    {
+                        var device = driver.transform;
+                        controllerOffset = new GameObject("Controller Height Offset").transform;
+                        controllerOffset.SetParent(device.parent, false);
+                        device.SetParent(controllerOffset, false);
+                    }
+
                     controllerInteractor = controller.GetComponentInChildren<NearFarInteractor>(true);
                     if (controllerInteractor != null)
                     {
@@ -114,6 +131,12 @@ namespace FirstAid
                     controllerModel.Root.gameObject.SetActive(value);
                 if (!value)
                     ShowTrackedModel(false);
+            }
+
+            public void SetSimulatorOffset(bool active)
+            {
+                if (controllerOffset != null)
+                    controllerOffset.localPosition = active ? Vector3.down * 0.14f : Vector3.zero;
             }
 
             public bool TryGetFreePalm(out Vector3 palm)

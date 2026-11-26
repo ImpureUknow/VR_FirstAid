@@ -16,6 +16,7 @@ namespace FirstAid
         private float end;
         private float height;
         private bool visible;
+        private bool errorVisible;
 
         public static FirstAidNotice Create(Transform parent)
         {
@@ -57,6 +58,7 @@ namespace FirstAid
             height = offset;
             end = Time.unscaledTime + seconds;
             text.text = message;
+            errorVisible = error;
             background.color = error ? new Color(0.59f, 0.105f, 0.12f, 0.97f) :
                 new Color(0.07f, 0.29f, 0.235f, 0.96f);
             if (!visible)
@@ -105,6 +107,22 @@ namespace FirstAid
                 return;
             }
 
+            if (errorVisible)
+            {
+                Vector3 viewport = camera.WorldToViewportPoint(point);
+                if (viewport.z <= 0f)
+                    viewport = new Vector3(0.5f, 0.39f, 0.58f);
+
+                viewport.x = Mathf.Clamp(viewport.x, 0.30f, 0.70f);
+                viewport.y = Mathf.Clamp(viewport.y, 0.35f, 0.54f);
+                viewport.z = Mathf.Clamp(viewport.z, 0.49f, 0.64f);
+                float frustumWidth = 2f * viewport.z * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad) * camera.aspect;
+                canvas.transform.localScale = Vector3.one * Mathf.Min(0.00088f, frustumWidth * 0.46f / 400f);
+                canvas.transform.SetPositionAndRotation(camera.ViewportToWorldPoint(viewport), camera.transform.rotation);
+                return;
+            }
+
+            canvas.transform.localScale = Vector3.one * 0.00088f;
             Vector3 direction = point - camera.transform.position;
             if (direction.sqrMagnitude > 0.001f)
                 canvas.transform.SetPositionAndRotation(point, Quaternion.LookRotation(direction, camera.transform.up));
